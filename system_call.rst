@@ -45,7 +45,7 @@ Such splited address ranges have to implement differenet access control for the 
 - User space: for holding user application related objects including related shared libraries;
 - Kernel space: for holding kernel related objects including kernel code and data;
 
-When logical address is also taken into consideration, we can have a more clearer picutre based on segment over user space and kernel space:
+When logical address is also taken into consideration, we can have a more clearer picutre by using segments to describe user space and kernel space:
 
 - User space: consists of user code segment, user data segment, user heap segment, shared libraries segment, stack segment, etc.;
 - Kernel space: consists of kernel code segment, kernel data segment, etc.;
@@ -53,7 +53,11 @@ When logical address is also taken into consideration, we can have a more cleare
 Privilege Level
 ~~~~~~~~~~~~~~~~
 
-When an appliation is excuting within its virtual address space, it can refer to any address by giving an segment base and a offset. Hence the access control for user space and kernel space can be configured on segment - the access control is named privilege level, which is associated with a concept named protection ringhs.
+We have introduced the concept of user space and kernel space is based on the requirement of differnet access control under the consideration of system stability. In the background, this actually needs the support from hardware. With x86 architectured CPU, 4 protection rings are defined to support different instruction execution privileges, they are ring 0 which has the highest privilege to ring 3 which has the lowest privilege. While the logical splitting of user space and kernel space makes Linux only leverage 2 of the rings - ring 0 for kernel mode where all instructions can be executed, and ring 3 for user mode where privileged instructions cannot be executed. Linux defines a term named privilege level accordingly to describe the mapping mechanism between user/kernel space to CPU protection rings, and it is easy to conclude that privilege level has only 2 values - 0 when code is executing in kernel sapce, 3 when code is executing in user space.
+
+In the meanwhile, when an application is excuting within its virtual address space(no matter user space or kernel space), it can refer to any address by giving an segment base and an offset. Hence it is a good place to define privilege level within the segment - this is what Linux is doing. Let's have an experiment to verify this.
+
+**inspect cs with gdb - to be added**
 
 System Call
 -------------
