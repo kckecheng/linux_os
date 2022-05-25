@@ -89,13 +89,11 @@ Explanations:
 System Call
 -------------
 
-Definition
-~~~~~~~~~~~~
+User space and kernel space have different access control based on our previous introduction. When an application is running, its memory access for most cases is restricted within its user space, but when resources which are controlled by kernel are needed, there must be a mechanism gives applications the ability to consume resources. This is the work of system call which acts as an interface between user space and kernel space.
 
-System call is the interface between user space and kernel space. When an application is running, its memory access(virtual memory) are limited within its user space. Whenever privileged resouces/services are needed, system calls need to be invoked to switch to the kernel space(kernel code will be executed on behalf of the process after switching).
+Whenever an application needs to access/consume privileged resouces/services, it needs to invoke corresponding system calls. After each system call, a switch from user space to kernel space will be executed and kernel code will kick in consuming/running resources/services on behalf of the associated application. At the end of a system call, another switch from kernel space to user space will be executed and a return value of the system call will be provided, then the application can continue its execution within user space again. Such a switch from user/kernel space to kernel/user space is called a context switch which is performed with the help of CPU, we will cover this in the process scheduling document.
 
-System calls apply strict check on any request from user space to guarantee no offensive operations are involved, hence bugs of user space application won't impact the system stability.
-
+All system calls apply strict check on parameters when invoked from user space to guarantee no offensive operations are involved, hence bugs of user space application won't impact kernel space(no harm to the system stability).
 
 Implementation
 ~~~~~~~~~~~~~~~~
