@@ -33,7 +33,10 @@ The relationship of logical address, virtual address and physical address can be
 
 **Logical Address ---> MMU Segmentation Unit ---> Virtual Address ---> MMU Paging Unit ---> Physical Address**
 
-**Notes**: The segmentation unit of x86 architectured CPU was implemented back to the time when CPU was not able to address the full physical memory space(The details will be introduced in the memory management document). Nowadasys, x86_64 CPU is able to address hundreds of TB even PB memory, segmentation is not needed at all - but it is still used(have to be used since the segmentation unit in MMU cannot be disabled) for some limited features.
+**Notes**:
+
+- The segmentation unit of x86 architectured CPU was implemented back to the time when CPU was not able to address the full physical memory space(The details will be introduced in the memory management document). Nowadasys, x86_64 CPU is able to address hundreds of TB even PB memory, segmentation is not needed at all - but it is still used(have to be used since the segmentation unit in MMU cannot be disabled) for some limited features;
+- Some tools such as objdump can be used to display section information from ELF binaries;
 
 User Space and Kernel Space
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -116,6 +119,167 @@ Instruction syscall decides which actual system call to invoke based on a intege
 Once a system call in kernel space has been completed, another assembly instruction named sysret will be called to switch back from kernel space to user space, then the application resume its execution in user space with the value gottern from the previously invoked system call(from CPU registers).
 
 Since system calls will be used frequently, and it is not efficient to trigger a system call in kernel code with the assembly instruction syscall like above, libraries are used instead. The most famous library on Linux is the glibc which wraps syscall details and provided a straightforward and sophisticated programming API to applications.
+
+Trace and Verify
+~~~~~~~~~~~~~~~~~
+
+We have introduced system calls in theory, let's trace a system call directly from both user space and kernel to get an deeper understanding.
+
+The system call we are going to trace is dup, to trace it, let's create a simple c file named main.c with below contents:
+
+::
+
+  #include <unistd.h>
+  #include <sys/types.h>
+  #include <sys/stat.h>
+  #include <fcntl.h>
+  #include <errno.h>
+  #include <stdio.h>
+
+  int main() {
+    const char *fpath = "/etc/passwd";
+    int fd1, fd2;
+
+    fd1 = open(fpath, O_RDONLY);
+    if (fd1 == -1) {
+      printf("fail to open file: %s\n", fpath);
+      return errno;
+    }
+
+    fd2 = dup(fd1);
+    if (fd2 == -1) {
+      printf("fail to dup file: %s\n", fpath);
+      return errno;
+    }
+
+    close(fd1);
+    close(fd2);
+    return 0;
+  }
+
+Let's compile the program as below:
+
+::
+
+  gcc -g main.c -o dup_trace
+
+**User Space Tracing**
+
+User space tracing can be performed with the help of gdb, let's try to trace dup:
+
+::
+
+  gdb -q dup_trace
+  Reading symbols from dup_trace...
+  (gdb) b dup
+  Breakpoint 1 at 0x10b0
+  (gdb) start
+  Temporary breakpoint 2 at 0x11c9: file main.c, line 8.
+  Starting program: /home/kcbi/sandbox/gdbdemo/dup_trace
+
+  Temporary breakpoint 2, main () at main.c:8
+  8       int main() {
+  (gdb) c
+  Continuing.
+
+  Breakpoint 1, dup () at ../sysdeps/unix/syscall-template.S:78
+  78      ../sysdeps/unix/syscall-template.S: No such file or directory.
+  (gdb)
+
+The result tells us dup actually is implemented within ../sysdeps/unix/syscall-template.S at line 78. This is not a line in our source code, where is it? Actually, as we previously said, what we use as a system call actually is the API provided by glibc libary which wraps the actual system call defined in kernel. Let's add the source code path for searching in glibc and start the trace again:
+
+::
+
+  (gdb) directory ~/glibc-2.31/sysdeps/
+  Source directories searched: /home/kcbi/glibc-2.31/sysdeps:$cdir:$cwd
+  (gdb) start
+  The program being debugged has been started already.
+  Start it from the beginning? (y or n) y
+  Temporary breakpoint 3 at 0x5555555551c9: file main.c, line 8.
+  Starting program: /home/kcbi/sandbox/gdbdemo/dup_trace
+
+  Temporary breakpoint 3, main () at main.c:8
+  8       int main() {
+  (gdb) c
+  Continuing.
+
+  Breakpoint 1, dup () at ../sysdeps/unix/syscall-template.S:78
+  78      T_PSEUDO (SYSCALL_SYMBOL, SYSCALL_NAME, SYSCALL_NARGS)
+
+Here we can see "T_PSEUDO (SYSCALL_SYMBOL, SYSCALL_NAME, SYSCALL_NARGS)" from glibc is invoked. Let's step into it:
+
+::
+
+  (gdb) step
+  dup () at ../sysdeps/unix/syscall-template.S:79
+  79              ret
+
+Nothing valuable is here, the next line to run is just a ret instruction, hence the work actually is done with the previous line "78      T_PSEUDO (SYSCALL_SYMBOL, SYSCALL_NAME, SYSCALL_NARGS)", let's disassemble the line:
+
+::
+
+  (gdb) start
+  The program being debugged has been started already.
+  Start it from the beginning? (y or n) y
+  Temporary breakpoint 4 at 0x5555555551c9: file main.c, line 8.
+  Starting program: /home/kcbi/sandbox/gdbdemo/dup_trace
+
+  Temporary breakpoint 4, main () at main.c:8
+  8       int main() {
+  (gdb) c
+  Continuing.
+
+  Breakpoint 1, dup () at ../sysdeps/unix/syscall-template.S:78
+  78      T_PSEUDO (SYSCALL_SYMBOL, SYSCALL_NAME, SYSCALL_NARGS)
+  (gdb) disassemble
+  Dump of assembler code for function dup:
+  => 0x00007ffff7ed7890 <+0>:     endbr64
+     0x00007ffff7ed7894 <+4>:     mov    $0x20,%eax
+     0x00007ffff7ed7899 <+9>:     syscall
+     0x00007ffff7ed789b <+11>:    cmp    $0xfffffffffffff001,%rax
+     0x00007ffff7ed78a1 <+17>:    jae    0x7ffff7ed78a4 <dup+20>
+     0x00007ffff7ed78a3 <+19>:    retq
+     0x00007ffff7ed78a4 <+20>:    mov    0xdd5c5(%rip),%rcx        # 0x7ffff7fb4e70
+     0x00007ffff7ed78ab <+27>:    neg    %eax
+     0x00007ffff7ed78ad <+29>:    mov    %eax,%fs:(%rcx)
+     0x00007ffff7ed78b0 <+32>:    or     $0xffffffffffffffff,%rax
+     0x00007ffff7ed78b4 <+36>:    retq
+  End of assembler dump.
+
+Based on the output, it is clear to see some CPU registers will be set and syscall will be invoked. Based on previous introduction, we know system call number and parameters will be used during system calls:
+
+- The system call number for dup is 32 based on arch/x86/include/generated/uapi/asm/unistd_64.h;
+- The function signature for dup is "int dup(int oldfd)", based on the system call table(man syscall) for x86_64 as below, the only parameter oldfd will be set on dri;
+
+  ::
+
+    Arch/ABI      arg1  arg2  arg3  arg4  arg5  arg6  arg7  Notes
+    x86-64        rdi   rsi   rdx   r10   r8    r9    -
+
+Let's verify the system call number(32) and registers(rdi) are correct during the execution:
+
+::
+
+  (gdb) p fd1
+  No symbol "fd1" in current context.
+  (gdb) up
+  #1  0x000055555555522a in main () at main.c:18
+  18        fd2 = dup(fd1);
+  (gdb) p fd1
+  $15 = 3
+  (gdb) down
+  #0  dup () at ../sysdeps/unix/syscall-template.S:78
+  78      T_PSEUDO (SYSCALL_SYMBOL, SYSCALL_NAME, SYSCALL_NARGS)
+  (gdb) p 0x20
+  $16 = 32
+  (gdb) p $rdi
+  $17 = 3
+
+The system call number is 32 and it indeed will be set on the eax register (0x00007ffff7ed7894 <+4>:     mov    $0x20,%eax). In the meanwhile, the paramter passed to dup is oldfd which is 3, it is set on the rdi register as expected. The user space tracing ends here, other stories happen within kernel.
+
+**Kernel Space Tracing**
+
+
 
 Summary
 ~~~~~~~~~
