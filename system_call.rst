@@ -92,6 +92,9 @@ Explanations:
 System Call
 -------------
 
+Definition
+~~~~~~~~~~~
+
 User space and kernel space have different access control based on our previous introduction. When an application is running, its memory access is fully granted within user space, however, consuming privileged resources in kernel space is not possible since higher privilege level is required - but consuming such resources is not avoidable. There must be a mechanism giving applications the ability to swtich to kernel space - this is the work of system call.
 
 Whenever an application needs to access/consume privileged resouces/services, it needs to invoke corresponding system calls. After each system call, a switch from user space to kernel space will be executed and kernel code will kick in consuming/running resources/services on behalf of the associated application. At the end of a system call, another switch from kernel space to user space will be executed and a return value of the system call will be provided, then the application can continue its execution within user space again. Such a switch from user/kernel space to kernel/user space is called a context switch, we will cover this in the process scheduling document.
@@ -103,9 +106,9 @@ Implementation
 
 For end users, system calls look like normal APIs. For example, when we want to get the contents of a file, function "ssize_t read(int fd, void \*buf, size_t count)" will be called from our applications. Most users take "read" here as a system call and think it as a kernel API - this is not correct or at least not accurate.
 
-System calls in kernel actually are specific assembly instructions which are architecture dependent. When an application needs to invoke a system call, it needs to set values on several CPU registers, then call a specific assembly instruction named syscall which triggers a context switch from user space to kernel space. It is syscall who invokes the actual system call implemented in kernel code. In other words, they are hundreds of system calls defined within kernel, but all of them are invoked by the same syscall intruction.
+In fact, when an application needs to invoke a system call, it needs to set values on several specific CPU registers, then call a specific assembly instruction named syscall which triggers a context switch from user space to kernel space. After switching to kernel space, a system call dispater will do some preparations and invoke the actual system call implemented in kernel code.  There are several hundreds of system calles define with linux, all of them are invoked by the same system call dispather with the help of syscall who inits the user space to kernel space context switch.
 
-Instruction syscall decides which actual system call to invoke based on a integer value set on a CPU register(rax for x86_64), and pass values collected from other registers as the system call parameters. In other words, each system call is mapped to a integer within kernel, and system calls supported limited num. of parameters(at most 6) due to the num. of available CPU registers available for syscall. The integer num. used to map the actual system call within kernel is called **system call number**. Linux kernel also maintains a mapping between system call paramters and CPU registers, together with system call numbers, a table named **system call table** as below can be gotten:
+The system call dispather implemented as assembly language within kernel decides which actual system call to invoke based on a integer value set on a specific CPU register(rax for x86_64), and pass values collected from other registers as parameters to the actual system call which are implemented in C language. Each system call is mapped to a integer within kernel, and system calls supported limited num. of parameters(at most 6) due to the num. of available CPU registers. The integer num. used to map the actual system call within kernel is called **system call number**. Linux kernel also maintains a mapping between system call paramters and CPU registers, together with system call numbers, a table named **system call table** as below can be gotten:
 
 ::
 
@@ -118,7 +121,7 @@ Instruction syscall decides which actual system call to invoke based on a intege
 
 Once a system call in kernel space has been completed, another assembly instruction named sysret will be called to switch back from kernel space to user space, then the application resume its execution in user space with the value gottern from the previously invoked system call(from CPU registers).
 
-Since system calls will be used frequently, and it is not efficient to trigger a system call in kernel code with the assembly instruction syscall like above, libraries are used instead. The most famous library on Linux is the glibc which wraps syscall details and provided a straightforward and sophisticated programming API to applications.
+Since system calls will be used frequently, and it is not efficient to trigger system calls in user space with assembly instructions like above(set values on CPU registers then invoke syscall), libraries are used instead. The most famous library on Linux is glibc which wraps syscall details and provids a straightforward and sophisticated programming API to user space applications. Now we understand what we previous called as "system call" are actually glibc provided APIs in user space which perform those complicated assembly instructions on behalf of us.
 
 Trace and Verify
 ~~~~~~~~~~~~~~~~~
@@ -279,7 +282,7 @@ The system call number is 32 and it indeed will be set on the eax register (0x00
 
 **Kernel Space Tracing**
 
-
+https://hackmd.io/@RinHizakura/S1wfy6nQO
 
 Summary
 ~~~~~~~~~
@@ -290,12 +293,14 @@ As a summary, the whole process of a system call is as below:
 2. Associated system call API defined within glibc is invoked;
 3. The glibc wrapper for the acutal system call will set CPU registers with corresponding system call number and paramters;
 4. Instruction syscall is invoked from glibc, a context switch from user space to kernel space is performed;
-5. Current application status including user stacks, return address, etc. will be saved on kernel stack;
-6. CPU registers for the actual system call get saved on kernel stack;
-7. The actual system call in kernel space is identified by checking the system call number and gets executed;
-8. Application status are restored from kernel stacks;
-9. Instruction sysret is executed to switch back to user space;
-10. The application resumes its normal execution in user space.
+5. The system call dispatcher within linux kernel will kick in to play;
+6. Current application status including user stacks, return address, etc. will be saved on kernel stack;
+7. CPU registers for the actual system call get saved on kernel stack;
+8. The system call number and paramters are collected from CPU registers;
+9. The actual system call is invoked by the system call dispather;
+10. Application status are restored from kernel stacks;
+11. Instruction sysret is executed to switch back to user space;
+12. The application resumes its normal execution in user space.
 
 **NOTES**:
 
@@ -304,7 +309,7 @@ As a summary, the whole process of a system call is as below:
 - Information for system call numbers is defined within linux source code file arch/x86/include/generated/uapi/asm/unistd_64.h;
 - Different architectures use difference instructions to switch from user space to kernel space, run command **man syscall** to find the detailed instruction used to perform the swtich;
 - Registers used for system call number and parameters on different architectures are different, run command **man syscall** to find the details;
-- x86_64 system call table reference: https://blog.rchapman.org/posts/Linux_System_Call_Table_for_x86_64/;
+- The raw x86_64 system call table can be found with linux source code file arch/x86/entry/syscalls/syscall_64.tbl;
 
 Tracing
 ----------
