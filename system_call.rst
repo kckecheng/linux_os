@@ -282,7 +282,95 @@ The system call number is 32 and it indeed will be set on the eax register (0x00
 
 **Kernel Space Tracing**
 
-https://hackmd.io/@RinHizakura/S1wfy6nQO
+There are several ways to perform trace within kernel space, such as crash, kgdb, gdb + qemu. We are going to use gdb + qemu + buildroot here, the details on how to set up such an env will be covered in another document.
+
+Let's start our remote gdb:
+
+::
+
+  gdb -q vmlinux
+  (gdb) target remote :1234
+  Remote debugging using :1234
+  amd_e400_idle () at arch/x86/kernel/process.c:780
+  780                     return;
+
+The next step is setting a breakpoint when dup is invoked from user space. In kernel space, the associated system call is__x64_sys_dup for x86_64(refer to arch/x86/entry/syscalls/syscall_64.tbl). Let's check what happens when dup is called:
+
+::
+
+  (gdb) b __x64_sys_dup
+  Breakpoint 1 at 0xffffffff81163a00: file fs/file.c, line 1286.
+  (gdb) c
+  Continuing.
+
+  Breakpoint 1, __x64_sys_dup (regs=0xffffc900001d7f58) at fs/file.c:1286
+  1286    SYSCALL_DEFINE1(dup, unsigned int, fildes)
+  (gdb) list 1286
+  1281                    return retval;
+  1282            }
+  1283            return ksys_dup3(oldfd, newfd, 0);
+  1284    }
+  1285
+  1286    SYSCALL_DEFINE1(dup, unsigned int, fildes)
+  1287    {
+  1288            int ret = -EBADF;
+  1289            struct file *file = fget_raw(fildes);
+  1290
+  (gdb)
+  1291            if (file) {
+  1292                    ret = get_unused_fd_flags(0);
+  1293                    if (ret >= 0)
+  1294                            fd_install(ret, file);
+  1295                    else
+  1296                            fput(file);
+  1297            }
+  1298            return ret;
+  1299    }
+  1300
+
+After setting the breakpoint on __x64_sys_dup, "continue" is executed from gdb. Once user applicaiton "dup_trace" is run, the breakpoint gets triggered. Based on the result, it is clear to see the function "SYSCALL_DEFINE1(dup, unsigned int, fildes)" defined within file fs/file.c is the kernel space system call implementation for dup. Now, let' check who is the system call dispather:
+
+::
+
+  (gdb) bt
+  #0  __x64_sys_dup (regs=0xffffc900001d7f58) at fs/file.c:1286
+  #1  0xffffffff81607f63 in do_syscall_x64 (nr=<error reading variable: dwarf2_find_location_expression: Corrupted DWARF expression.>,
+      regs=<error reading variable: dwarf2_find_location_expression: Corrupted DWARF expression.>) at arch/x86/entry/common.c:50
+  #2  do_syscall_64 (regs=0xffffc900001d7f58, nr=<optimized out>) at arch/x86/entry/common.c:80
+  #3  0xffffffff8180007c in entry_SYSCALL_64 () at arch/x86/entry/entry_64.S:113
+  #4  0x0000000000000000 in ?? ()
+
+From the output, the dispatcher entry_SYSCALL_64 defined within arch/x86/entry/entry_64.S can be located. Let's see what it actually does:
+
+::
+
+  (gdb) frame 3                                                                                                                                                                                                     #3  0xffffffff8180007c in entry_SYSCALL_64 () at arch/x86/entry/entry_64.S:113
+  113             call    do_syscall_64           /* returns with IRQs disabled */
+  (gdb) disassemble
+  Dump of assembler code for function entry_SYSCALL_64:
+     0xffffffff81800000 <+0>:     swapgs
+     0xffffffff81800003 <+3>:     mov    %rsp,%gs:0x6014
+     0xffffffff8180000c <+12>:    jmp    0xffffffff81800020 <entry_SYSCALL_64+32>
+     0xffffffff8180000e <+14>:    mov    %cr3,%rsp
+     0xffffffff81800011 <+17>:    nopl   0x0(%rax,%rax,1)
+     0xffffffff81800016 <+22>:    and    $0xffffffffffffe7ff,%rsp
+     0xffffffff8180001d <+29>:    mov    %rsp,%cr3
+     0xffffffff81800020 <+32>:    mov    %gs:0x1ac90,%rsp
+     0xffffffff81800029 <+41>:    pushq  $0x2b
+     0xffffffff8180002b <+43>:    pushq  %gs:0x6014
+     0xffffffff81800033 <+51>:    push   %r11
+     0xffffffff81800035 <+53>:    pushq  $0x33
+     0xffffffff81800037 <+55>:    push   %rcx
+     0xffffffff81800038 <+56>:    push   %rax
+     0xffffffff81800039 <+57>:    push   %rdi
+     ......
+     0xffffffff8180006e <+110>:   xor    %r15d,%r15d
+     0xffffffff81800071 <+113>:   mov    %rsp,%rdi
+     0xffffffff81800074 <+116>:   movslq %eax,%rsi
+     0xffffffff81800077 <+119>:   callq  0xffffffff81607f20 <do_syscall_64>
+     ......
+
+Generally speaking, the dispather performs a lot of operations on CPU registers, and then call do_syscall_64 defined within arch/x86/entry/common.c with two parameters: regs, and nr. The **nr** parameter is the system call number, and regs contains all other parameters needed for the actual system call. Based on nr, __x64_sys_dup will be finally selected by checking the system call table and invoked with desired paramters.
 
 Summary
 ~~~~~~~~~
