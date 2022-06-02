@@ -332,13 +332,12 @@ After setting the breakpoint on __x64_sys_dup, "continue" is executed from gdb. 
 
 ::
 
-  (gdb) bt
-  #0  __x64_sys_dup (regs=0xffffc900001d7f58) at fs/file.c:1286
-  #1  0xffffffff81607f63 in do_syscall_x64 (nr=<error reading variable: dwarf2_find_location_expression: Corrupted DWARF expression.>,
-      regs=<error reading variable: dwarf2_find_location_expression: Corrupted DWARF expression.>) at arch/x86/entry/common.c:50
-  #2  do_syscall_64 (regs=0xffffc900001d7f58, nr=<optimized out>) at arch/x86/entry/common.c:80
-  #3  0xffffffff8180007c in entry_SYSCALL_64 () at arch/x86/entry/entry_64.S:113
-  #4  0x0000000000000000 in ?? ()
+	(gdb) bt
+	#0  __x64_sys_dup (regs=0xffffc90000147f58) at fs/file.c:1289
+	#1  0xffffffff8162dc63 in do_syscall_x64 (nr=<optimized out>, regs=0xffffc90000147f58) at arch/x86/entry/common.c:50
+	#2  do_syscall_64 (regs=0xffffc90000147f58, nr=<optimized out>) at arch/x86/entry/common.c:80
+	#3  0xffffffff8180007c in entry_SYSCALL_64 () at arch/x86/entry/entry_64.S:113
+	#4  0x0000000000000000 in ?? ()
 
 From the output, the dispatcher entry_SYSCALL_64 defined within arch/x86/entry/entry_64.S can be located. Let's see what it actually does:
 
@@ -370,7 +369,94 @@ From the output, the dispatcher entry_SYSCALL_64 defined within arch/x86/entry/e
      0xffffffff81800077 <+119>:   callq  0xffffffff81607f20 <do_syscall_64>
      ......
 
-Generally speaking, the dispather performs a lot of operations on CPU registers, and then call do_syscall_64 defined within arch/x86/entry/common.c with two parameters: regs, and nr. The **nr** parameter is the system call number, and regs contains all other parameters needed for the actual system call. Based on nr, __x64_sys_dup will be finally selected by checking the system call table and invoked with desired paramters.
+Generally speaking, the dispather performs a lot of operations on CPU registers(to collect system call num. and parameters set in user space before syscall), and then call do_syscall_64 defined within arch/x86/entry/common.c with two parameters: regs, and nr. The **nr** parameter is the system call number, and regs contains all other parameters needed for the actual system call. Based on nr, __x64_sys_dup will be finally selected and invoked, let's understand how this happens:
+
+::
+
+  (gdb) frame 1
+  #1  0xffffffff8162dc63 in do_syscall_x64 (nr=<optimized out>, regs=0xffffc90000147f58) at arch/x86/entry/common.c:50
+  50                      regs->ax = sys_call_table[unr](regs);
+  (gdb) list
+  45               */
+  46              unsigned int unr = nr;
+  47
+  48              if (likely(unr < NR_syscalls)) {
+  49                      unr = array_index_nospec(unr, NR_syscalls);
+  50                      regs->ax = sys_call_table[unr](regs);
+  51                      return true;
+  52              }
+  53              return false;
+  54      }
+  (gdb) p *sys_call_table
+  $1 = (const sys_call_ptr_t) 0xffffffff81150c80 <__x64_sys_read>
+
+From the output, it is clear to see the actual system call in kernel space, A.K.A __x64_sys_dup, is selected by checking sys_call_table[unr] and invoked directrly with regs as parameters. Let's see what is defined within sys_call_table:
+
+::
+
+  (gdb) info variables sys_call_table
+  All variables matching regular expression "sys_call_table":
+
+  File arch/x86/entry/syscall_64.c:
+  16:     const sys_call_ptr_t sys_call_table[451];
+  (gdb) list arch/x86/entry/syscall_64.c:16
+  11      #include <asm/syscalls_64.h>
+  12      #undef __SYSCALL
+  13
+  14      #define __SYSCALL(nr, sym) __x64_##sym,
+  15
+  16      asmlinkage const sys_call_ptr_t sys_call_table[] = {
+  17      #include <asm/syscalls_64.h>
+  18      };
+
+Based on the result, it is clear sys_call_table is initialized with asm/syscalls_64.h, let's check that file(cd to the linux kernel source root directory at first):
+
+::
+
+	# find . -name syscalls_64.h
+	./arch/x86/include/generated/asm/syscalls_64.h
+	./arch/x86/um/shared/sysdep/syscalls_64.h
+	# head ./arch/x86/include/generated/asm/syscalls_64.h
+	__SYSCALL(0, sys_read)
+	__SYSCALL(1, sys_write)
+	__SYSCALL(2, sys_open)
+	__SYSCALL(3, sys_close)
+	__SYSCALL(4, sys_newstat)
+	__SYSCALL(5, sys_newfstat)
+	__SYSCALL(6, sys_newlstat)
+	__SYSCALL(7, sys_poll)
+	__SYSCALL(8, sys_lseek)
+	__SYSCALL(9, sys_mmap)
+
+Let's continue our tracing to see what happens once the system call in kernel space is done:
+
+::
+
+	(gdb) bt
+	#0  __x64_sys_dup (regs=0xffffc90000147f58) at fs/file.c:1289
+	#1  0xffffffff8162dc63 in do_syscall_x64 (nr=<optimized out>, regs=0xffffc90000147f58) at arch/x86/entry/common.c:50
+	#2  do_syscall_64 (regs=0xffffc90000147f58, nr=<optimized out>) at arch/x86/entry/common.c:80
+	#3  0xffffffff8180007c in entry_SYSCALL_64 () at arch/x86/entry/entry_64.S:113
+	#4  0x0000000000000000 in ?? ()
+	(gdb) n
+	1286    SYSCALL_DEFINE1(dup, unsigned int, fildes)
+	(gdb) n
+	do_syscall_64 (regs=0xffffc90000147f58, nr=<optimized out>) at arch/x86/entry/common.c:86
+	86              syscall_exit_to_user_mode(regs);
+	(gdb) b syscall_exit_to_user_mode
+	Breakpoint 2 at 0xffffffff81631f00: file ./arch/x86/include/asm/current.h, line 15.
+	(gdb) c
+	Continuing.
+
+	Breakpoint 2, syscall_exit_to_user_mode (regs=regs@entry=0xffffc90000147f58) at ./arch/x86/include/asm/current.h:15
+	15              return this_cpu_read_stable(current_task);
+
+Once the system call is done, syscall_exit_to_user_mode defined within function do_syscall_64 will be used to return to user space. Of course there will be quite some details behind this function, but it is not our interest. We can conclude our system call tracing in kernel space:
+
+1. Once a system call is triggered from user space after the syscall instruction, a context switch from user space to kernel space will be executed;
+2. The system call dispather defined within arch/x86/entry/entry_64.S will collect system call num. and parameters from CPU registers and invoke do_syscall_x64 defined within arch/x86/entry/common.c;
+3. The do_syscall_x64 will check system call table(initialized with arch/x86/include/generated/asm/syscalls_64.h) using the system call num. to get the actual system call and invoke it with parameters;
+4. Once the actual system call is done, a context switch from kernel space to user space will be triggered;
 
 Summary
 ~~~~~~~~~
