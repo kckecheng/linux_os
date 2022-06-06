@@ -106,9 +106,9 @@ Implementation
 
 For end users, system calls look like normal APIs. For example, when we want to get the contents of a file, function "ssize_t read(int fd, void \*buf, size_t count)" will be called from our applications. Most users take "read" here as a system call and think it as a kernel API - this is not correct or at least not accurate.
 
-In fact, when an application needs to invoke a system call, it needs to set values on several specific CPU registers, then call a specific assembly instruction named syscall which triggers a context switch from user space to kernel space. After switching to kernel space, a system call dispater will do some preparations and invoke the actual system call implemented in kernel code.  There are several hundreds of system calles define with linux, all of them are invoked by the same system call dispather with the help of syscall who inits the user space to kernel space context switch.
+In fact, when an application needs to invoke a system call, it needs to set values on several specific CPU registers, then call a specific assembly instruction named syscall which triggers a context switch from user space to kernel space. After switching to kernel space, a system call dispater will do some preparations and invoke the actual system call implemented in kernel code.  There are several hundreds of system calles defined with linux, all of them are invoked by the same system call dispather with the help of syscall who inits the user space to kernel space context switch.
 
-The system call dispather implemented as assembly language within kernel decides which actual system call to invoke based on a integer value set on a specific CPU register(rax for x86_64), and pass values collected from other registers as parameters to the actual system call which are implemented in C language. Each system call is mapped to a integer within kernel, and system calls supported limited num. of parameters(at most 6) due to the num. of available CPU registers. The integer num. used to map the actual system call within kernel is called **system call number**. Linux kernel also maintains a mapping between system call paramters and CPU registers, together with system call numbers, a table named **system call table** as below can be gotten:
+The system call dispather implemented as assembly language within kernel decides which actual system call to invoke based on a integer value set on a specific CPU register(rax for x86_64), and pass values collected from other registers as parameters to the actual system call which are implemented in C language. Each system call is mapped to a integer value within kernel, and system calls supported limited num. of parameters(at most 6) due to the num. of available CPU registers. The integer num. used to map the actual system call within kernel is called **system call number**. Linux kernel also maintains a mapping between system call paramters and CPU registers, together with system call numbers, a table named **system call table** as below can be gotten:
 
 ::
 
@@ -123,10 +123,23 @@ Once a system call in kernel space has been completed, another assembly instruct
 
 Since system calls will be used frequently, and it is not efficient to trigger system calls in user space with assembly instructions like above(set values on CPU registers then invoke syscall), libraries are used instead. The most famous library on Linux is glibc which wraps syscall details and provids a straightforward and sophisticated programming API to user space applications. Now we understand what we previous called as "system call" are actually glibc provided APIs in user space which perform those complicated assembly instructions on behalf of us.
 
+vsyscall and vDSO
+~~~~~~~~~~~~~~~~~~
+
+Most system calls are implemented with the mechanism introduced above. However, system calls are expensive since it involes context switches which will interrupt the current running user space application. To mitigate the overheads, two mechanisms named vsyscall and vDSO are designed to make certain system calls work directly in user space without the need of context swithes.
+
+**vsyscall**
+
+It is the short name for virtual system call. Its initial implementation is quite straightforward: it maps the implementation of certain system calls and required variables to a user space memory page(as read only for security, hence mapped system calls should be those which have no needs to modify variables). After such mappings, mapped system calls can be used directly in user space. Since only one memory page is mapped, only four system calls are supported. Furthermore, the mapping is static - all processes access mapped system calls from the system virtual addresses, which brings potential security issues. Because such limitations, vsyscalls are not recommended, and emulated vsyscall are designed to keep backward compatibility. For more information on vsyscall, please consult google search.
+
+**vDSO**
+
+To overcome the limitations of vsyscall, vDSO, short for virtual dynamic shared object, are introduced. Since it is dynamic allocation based, it supports more than four system calls, and the mapping addresses are different for each process which solves the security concerns of vsyscall. For end users, vDSO is exposed with the help of glibc which wrapps the details - for a system has vDSO enabled, it will be used of course; for a system does not have vDSO support, a traditional system call will be used. For more details of vDSO, please consult google search.
+
 Trace and Verify
 ~~~~~~~~~~~~~~~~~
 
-We have introduced system calls in theory, let's trace a system call directly from both user space and kernel to get an deeper understanding.
+We have introduced system calls in theory, let's trace a system call(traditional system calls but not vsyscall/vDSO) directly from both user space and kernel to get an deeper understanding.
 
 The system call we are going to trace is dup, to trace it, let's create a simple c file named main.c with below contents:
 
@@ -485,16 +498,22 @@ As a summary, the whole process of a system call is as below:
 - Registers used for system call number and parameters on different architectures are different, run command **man syscall** to find the details;
 - The raw x86_64 system call table can be found with linux source code file arch/x86/entry/syscalls/syscall_64.tbl;
 
-Tracing
-----------
+Tools
+-------
+
+gdb + qemu is a good way to trace into linux kernel, however, it is not feasible for production systems. We are going to introudce several tools which can be leveraged for system call analysis for production systems in this section.
 
 ftrace
 ~~~~~~~~~
 
+TBD
+
 bpf
 ~~~~~~
+
+TBD
 
 perf
 ~~~~~~
 
-
+TBD
