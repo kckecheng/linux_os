@@ -506,7 +506,71 @@ gdb + qemu is a good way to trace into linux kernel, however, it is not feasible
 ftrace
 ~~~~~~~~~
 
-TBD
+Ftrace is an internal tracer designed to help out developers and designers of systems to find what is going on inside the kernel. It can be used for debugging or analyzing latencies and performance issues that take place in kernel space.
+
+We will only demonstrate the basics of ftrace with several examples related with system call analysis instead of covering the tool thoroughly. Please refer to https://www.kernel.org/doc/Documentation/trace/ftrace.txt for more information.
+
+**function trace**
+
+One of the most useful feature of ftrace is its capability of tracing functions defined in kernel space. System calls are implemented in kernel, so we can trace them with ftrace. Let's trace the system call **dup** as before.
+
+::
+
+  cd /sys/kernel/debug/tracing
+  cat available_tracers # find out what kind of trace can be used, we are going to use function tracer
+  cat current_tracer # find out the current enabled tracer
+  echo function > current_tracer # enable function trace
+  echo 1 > options/latency-format # enable latency format output
+  cat available_filter_functions | grep sys_dup # here we can find if __x64_sys_dup is supported as the filter
+  echo __x64_sys_dup > set_ftrace_filter # trace only  __x64_sys_dup
+  echo > trace # clear previously tracing result
+  cat trace # start function tracing on __x64_sys_dup
+  # if there is no outout, ssh localhost which will trigger __x64_sys_dup
+  cat trace
+  #                  _------=> CPU#
+  #                 / _-----=> irqs-off
+  #                | / _----=> need-resched
+  #                || / _---=> hardirq/softirq
+  #                ||| / _--=> preempt-depth
+  #                |||| /     delay
+  #  cmd     pid   ||||| time  |   caller
+  #     \   /      |||||  \    |   /
+      sshd-4381    2.... 142164512us#: __x64_sys_dup <-do_syscall_64
+      sshd-4381    2.... 142166125us : __x64_sys_dup <-do_syscall_64
+
+The result is really self explained. Let's trace a specified process this time:
+
+::
+
+  echo > set_ftrace_filter # trace all functions instead of a specific function
+  echo 16786 > set_event_pid # only trace the specified process
+  echo > trace
+  cat trace
+  #                  _------=> CPU#
+  #                 / _-----=> irqs-off
+  #                | / _----=> need-resched
+  #                || / _---=> hardirq/softirq
+  #                ||| / _--=> preempt-depth
+  #                |||| /     delay
+  #  cmd     pid   ||||| time  |   caller
+  #     \   /      |||||  \    |   /
+    <idle>-0       0d... 11013035us : update_ts_time_stats <-tick_irq_enter
+    <idle>-0       0d... 11013035us : nr_iowait_cpu <-update_ts_time_stats
+    <idle>-0       0d... 11013036us : tick_do_update_jiffies64 <-tick_irq_enter
+    <idle>-0       0d... 11013036us : touch_softlockup_watchdog_sched <-irq_enter
+    <idle>-0       0d... 11013036us : _local_bh_enable <-irq_enter
+    <idle>-0       0d... 11013036us : irqtime_account_irq <-irq_enter
+    <idle>-0       0d.h. 11013036us : sched_ttwu_pending <-scheduler_ipi
+  echo 0 > tracing_on # turn off trace
+  echo nop > current_tracer # clear tracer
+
+Again the result is self explained.
+
+Please explore ftrace function trace by yourself:)
+
+**function graph trace**
+
+
 
 bpf
 ~~~~~~
