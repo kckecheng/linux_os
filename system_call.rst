@@ -510,9 +510,9 @@ Ftrace is an internal tracer designed to help out developers and designers of sy
 
 We will only demonstrate the basics of ftrace with several examples related with system call analysis instead of covering the tool thoroughly. Please refer to https://www.kernel.org/doc/Documentation/trace/ftrace.txt for more information.
 
-**function trace**
+**function tracer**
 
-One of the most useful feature of ftrace is its capability of tracing functions defined in kernel space. System calls are implemented in kernel, so we can trace them with ftrace. Let's trace the system call **dup** as before.
+One of the most useful feature of ftrace is its capability of tracing functions defined in kernel space. System calls are implemented in kernel, we can thereby trace them with ftrace. Let's trace the system call **dup** as before.
 
 ::
 
@@ -564,18 +564,61 @@ The result is really self explained. Let's trace a specified process this time:
   echo 0 > tracing_on # turn off trace
   echo nop > current_tracer # clear tracer
 
-Again the result is self explained.
+Again the result is self explained. Please explore more usage of function tracer by yourself:)
 
-Please explore ftrace function trace by yourself:)
+**function graph tracer**
 
-**function graph trace**
+function graph tracer is similar as function tracer except that it also trace both the entry and exit of a function. It then provides the ability to draw a graph of function calls similar to C code source. Again, like trace system call **dup** with function graph tracer.
 
+::
 
+  cd /sys/kernel/debug/tracing
+  cat available_tracers | grep graph
+  echo function_graph > current_tracer
+  echo 1 > tracing_on
+  echo 1 > options/latency-format
+  echo __x64_sys_dup > set_graph_function # trace only __x64_sys_dup
+  echo > trace
+  cat trace
+  # if there is no outout, ssh localhost which will trigger __x64_sys_dup
+  cat trace
+	#      _-----=> irqs-off
+	#     / _----=> need-resched
+	#    | / _---=> hardirq/softirq
+	#    || / _--=> preempt-depth
+	#    ||| /
+	# CPU||||  DURATION                  FUNCTION CALLS
+	# |  ||||   |   |                     |   |   |   |
+	 1)  ....              |  __x64_sys_dup() {
+	 1)  ....              |    ksys_dup() {
+	 1)  ....  0.140 us    |      __fget_files();
+	 1)  ....              |      get_unused_fd_flags() {
+	 1)  ....              |        __alloc_fd() {
+	 1)  ....  0.117 us    |          _raw_spin_lock();
+	 1)  ....  0.042 us    |          expand_files.part.12();
+	 1)  ....  0.995 us    |        }
+	 1)  ....  1.335 us    |      }
+	 1)  ....  0.040 us    |      __fd_install();
+	 1)  ....  2.832 us    |    }
+	 1)  ....  3.430 us    |  }
+	 1)  ....              |  __x64_sys_dup() {
+	 1)  ....              |    ksys_dup() {
+	 1)  ....  0.073 us    |      __fget_files();
+	 1)  ....              |      get_unused_fd_flags() {
+	 1)  ....              |        __alloc_fd() {
+	 1)  ....  0.115 us    |          _raw_spin_lock();
+	 1)  ....  0.042 us    |          expand_files.part.12();
+	 1)  ....  0.879 us    |        }
+	 1)  ....  1.233 us    |      }
+	 1)  ....  0.040 us    |      __fd_install();
+	 1)  ....  2.509 us    |    }
+	 1)  ....  2.978 us    |  }
+
+Now, we get a call graph of the function we are interested in with grapher trace. Please explore more usage of grapher tracer by yourself again:)
 
 bpf
 ~~~~~~
 
-TBD
 
 perf
 ~~~~~~
