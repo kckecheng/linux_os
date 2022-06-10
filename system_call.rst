@@ -501,7 +501,9 @@ As a summary, the whole process of a system call is as below:
 Tools
 -------
 
-gdb + qemu is a good way to trace into linux kernel, however, it is not feasible for production systems. We are going to introudce several tools which can be leveraged for system call analysis for production systems in this section.
+gdb + qemu is a good way to trace into linux kernel, however, it is not feasible for production systems. We are going to introduce several tools which can be leveraged for system call analysis for production systems in this section.
+
+NOTES: the system call we are going to trace/analysis in this section is still __x64_sys_dup, and the user application triggers the system call is still dup_trace which can be found in previous section "Trace and Verify".
 
 ftrace
 ~~~~~~~~~
@@ -524,9 +526,8 @@ One of the most useful feature of ftrace is its capability of tracing functions 
   cat available_filter_functions | grep sys_dup # here we can find if __x64_sys_dup is supported as the filter
   echo __x64_sys_dup > set_ftrace_filter # trace only  __x64_sys_dup
   echo > trace # clear previously tracing result
+  ./dup_trace
   cat trace # start function tracing on __x64_sys_dup
-  # if there is no outout, ssh localhost which will trigger __x64_sys_dup
-  cat trace
   #                  _------=> CPU#
   #                 / _-----=> irqs-off
   #                | / _----=> need-resched
@@ -535,8 +536,7 @@ One of the most useful feature of ftrace is its capability of tracing functions 
   #                |||| /     delay
   #  cmd     pid   ||||| time  |   caller
   #     \   /      |||||  \    |   /
-      sshd-4381    2.... 142164512us#: __x64_sys_dup <-do_syscall_64
-      sshd-4381    2.... 142166125us : __x64_sys_dup <-do_syscall_64
+     <...>-182781   2.... 3484807us : __x64_sys_dup <-do_syscall_64
 
 The result is really self explained. Let's trace a specified process this time:
 
@@ -579,46 +579,78 @@ function graph tracer is similar as function tracer except that it also trace bo
   echo 1 > options/latency-format
   echo __x64_sys_dup > set_graph_function # trace only __x64_sys_dup
   echo > trace
+  ./dup_trace
   cat trace
-  # if there is no outout, ssh localhost which will trigger __x64_sys_dup
-  cat trace
-	#      _-----=> irqs-off
-	#     / _----=> need-resched
-	#    | / _---=> hardirq/softirq
-	#    || / _--=> preempt-depth
-	#    ||| /
-	# CPU||||  DURATION                  FUNCTION CALLS
-	# |  ||||   |   |                     |   |   |   |
-	 1)  ....              |  __x64_sys_dup() {
-	 1)  ....              |    ksys_dup() {
-	 1)  ....  0.140 us    |      __fget_files();
-	 1)  ....              |      get_unused_fd_flags() {
-	 1)  ....              |        __alloc_fd() {
-	 1)  ....  0.117 us    |          _raw_spin_lock();
-	 1)  ....  0.042 us    |          expand_files.part.12();
-	 1)  ....  0.995 us    |        }
-	 1)  ....  1.335 us    |      }
-	 1)  ....  0.040 us    |      __fd_install();
-	 1)  ....  2.832 us    |    }
-	 1)  ....  3.430 us    |  }
-	 1)  ....              |  __x64_sys_dup() {
-	 1)  ....              |    ksys_dup() {
-	 1)  ....  0.073 us    |      __fget_files();
-	 1)  ....              |      get_unused_fd_flags() {
-	 1)  ....              |        __alloc_fd() {
-	 1)  ....  0.115 us    |          _raw_spin_lock();
-	 1)  ....  0.042 us    |          expand_files.part.12();
-	 1)  ....  0.879 us    |        }
-	 1)  ....  1.233 us    |      }
-	 1)  ....  0.040 us    |      __fd_install();
-	 1)  ....  2.509 us    |    }
-	 1)  ....  2.978 us    |  }
+  #      _-----=> irqs-off
+  #     / _----=> need-resched
+  #    | / _---=> hardirq/softirq
+  #    || / _--=> preempt-depth
+  #    ||| /
+  # CPU||||  DURATION                  FUNCTION CALLS
+  # |  ||||   |   |                     |   |   |   |
+   2)  ....              |  __x64_sys_dup() {
+   2)  ....              |    ksys_dup() {
+   2)  ....  0.083 us    |      __fget_files();
+   2)  ....              |      get_unused_fd_flags() {
+   2)  ....              |        __alloc_fd() {
+   2)  ....  0.149 us    |          _raw_spin_lock();
+   2)  ....  0.053 us    |          expand_files.part.12();
+   2)  ....  1.162 us    |        }
+   2)  ....  1.612 us    |      }
+   2)  ....  0.062 us    |      __fd_install();
+   2)  ....  3.309 us    |    }
+   2)  ....  4.169 us    |  }
 
 Now, we get a call graph of the function we are interested in with grapher trace. Please explore more usage of grapher tracer by yourself again:)
 
-bpf
-~~~~~~
+bpftrace
+~~~~~~~~~~~
 
+eBPF is a mechanism for Linux to execute code in Linux kernel space safely without changing linux source code or loading modules. While bpftrace is a high-level tracing language for eBPF which make using eBPF easily for beginers. We are going to demonstrace how to trace system calls with bpftrace here. Please refer to https://ebpf.io/ for more information on eBPF, and refer to https://github.com/iovisor/bpftrace for bpftrace.
+
+As usual, let's trace **dup** again. Instead of tracing __x64_sys_dup, we are going to trace its entry and exist with tracepoint:
+
+::
+
+  bpftrace -l "tracepoint:syscalls:sys_*_dup" # to list the entry and exit point for sys_dup
+  cat >bpftrace_dup.bt<<EOF
+	tracepoint:syscalls:sys_enter_dup /comm == "dup_trace" /
+	{
+					printf("\n*** tracepoint:syscalls:sys_enter_dup ****\n");
+					printf("process invoked the call: %s\nsystem call number: %d\nargs: %d\n", comm, args->__syscall_nr, args->fildes);
+	}
+
+	tracepoint:syscalls:sys_exit_dup /comm == "dup_trace" /
+	{
+					printf("\n*** tracepoint:syscalls:sys_exit_dup ***\n");
+					printf("process invoked the call: %s\nsystem call number: %d\nreturn value: %d\n", comm, args->__syscall_nr, args->ret);
+	}
+  EOF
+  sh -c 'sleep 20 && ./dup_trace' &
+  bpftrace bpftrace_dup.bt
+  # below are output
+	Attaching 2 probes...
+	fd1: 3
+	fd2: 4
+
+	*** tracepoint:syscalls:sys_enter_dup ****
+	process invoked the call: dup_trace
+	system call number: 32
+	args: 3
+
+	*** tracepoint:syscalls:sys_exit_dup ***
+	process invoked the call: dup_trace
+	system call number: 32
+	return value: 4
+
+Explanations:
+
+- bpftrace -l "tracepoint:syscalls:sys_*_dup": this command can be used to list all supported probes
+- bpftrace_dup.bt: in this file, we define 2 x tracepoints and actions when the tracepoints are hit
+- tracepoint:syscalls:sys_enter_dup output: once this tracepoint is hit(just before calling __x64_sys_dup), the system call number(32) and input paramter(3) are printed
+- tracepoint:syscalls:sys_exit_dup output: once this tracepint is hit(just after calling __x64_sys_dup), the syscall number(32) and return value(4) are printed
+
+As we can see, bpftrace can help us get internal information of a system call from user space. Beside such basic usages, it supports quite some other advanced features. Please refer to https://github.com/iovisor/bpftrace/blob/master/docs/reference_guide.md for more information.
 
 perf
 ~~~~~~
