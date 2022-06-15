@@ -652,7 +652,8 @@ Explanations:
 
 As we can see, bpftrace can help us get internal information of a system call from user space. Beside such basic usages, it supports quite some other advanced features. Please refer to https://github.com/iovisor/bpftrace/blob/master/docs/reference_guide.md for more information.
 
-perf
-~~~~~~
+Conclusion
+------------
 
-TBD
+We have introduced system calls in this document with tracing examples, and given an explanation on user space and kernel space which are prequisites to understand system calls. In the meanwhile, several tools which can help interpret system calls have been covered in brief. To get more knowledge on system calls, it is highly recommended to perform experiments by tracing into the kernel internal. Hope this document can help you get started on the journey on linux kernel.
+
